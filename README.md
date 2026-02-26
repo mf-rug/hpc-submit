@@ -6,8 +6,10 @@ A small command-line tool for submitting SLURM jobs to a remote HPC cluster. It 
 
 1. Reads the job name from your script's `#SBATCH --job-name=` directive
 2. Creates a dedicated directory on the remote cluster
-3. Transfers the job script (and any extra files) via `rsync`
-4. Runs `sbatch` on the remote and prints the job ID
+3. Transfers the **entire directory** containing the job script via `rsync`
+   (excluding any existing `output/` to avoid re-uploading large result files)
+4. Transfers any `--files` extras additively
+5. Runs `sbatch` on the remote and prints the job ID
 
 ## Requirements
 
@@ -47,15 +49,17 @@ The config is saved to `~/.config/hpc-submit/config.yaml` and can be re-run anyt
 hpc-submit my_job.sh
 ```
 
-The remote directory name is taken from `#SBATCH --job-name=` in the script. For a script containing `#SBATCH --job-name=protein_fold`, the files are placed in `~/jobs/protein_fold/` on the remote.
+Transfers the entire directory containing `my_job.sh` to the cluster and submits it.
+The remote directory name is taken from `#SBATCH --job-name=` in the script.
 
 ### Submit with additional files
 
 ```bash
-hpc-submit my_job.sh --files input_data/ params.csv
+hpc-submit my_job.sh --files extra_data.csv
 ```
 
-All specified files and directories are transferred alongside the job script into the same remote directory.
+The job directory is always transferred in full. `--files` is additive — use it for
+files that live outside the job directory.
 
 ### Override the job name
 
@@ -65,13 +69,29 @@ hpc-submit my_job.sh --jobname custom_name
 
 Uses `custom_name` as the remote directory name instead of parsing it from the script.
 
+### Check job status
+
+```bash
+hpc-submit --status 12345678
+```
+
+Queries `squeue` (running) or `sacct` (completed/failed) on the cluster and prints the result.
+
 ### Cancel a job
 
 ```bash
 hpc-submit --cancel 12345678
 ```
 
-Runs `scancel` on the remote cluster. The exact command is printed after every successful submission for easy copy-pasting.
+Runs `scancel` on the remote cluster.
+
+### Overwrite an existing remote directory
+
+```bash
+hpc-submit my_job.sh --overwrite
+```
+
+Skips the overwrite/new-directory prompt. Useful for scripted re-runs.
 
 ### Re-run configuration
 
@@ -79,25 +99,23 @@ Runs `scancel` on the remote cluster. The exact command is printed after every s
 hpc-submit --init
 ```
 
-## Smart directory handling
+## Directory conflict resolution
 
-**Output directory detection**: If your script has an `#SBATCH --output=` directive with a directory path (e.g. `--output=/scratch/logs/job_%j.out`), `hpc-submit` will ask whether to use that directory (`/scratch/logs/`) instead of the configured base path.
-
-**Conflict resolution**: If the remote directory already exists, you're prompted to either overwrite it or create a numbered variant (`_1`, `_2`, etc.).
+If the remote directory already exists, you are prompted to either overwrite it or
+create a numbered variant (`_1`, `_2`, etc.). Use `--overwrite` to skip the prompt.
 
 ## Example
 
 ```
-$ hpc-submit fold_protein.sh --files sequences.fasta
+$ hpc-submit myjob/job.sh
 
-Creating remote directory: ~/jobs/protein_fold
-Transferring files...
+Transferring contents of /path/to/myjob/ ...
 Submitting job...
 
 ----------------------------------------
 Job submitted successfully.
   Job ID:          12345678
-  Remote directory: ~/jobs/protein_fold
+  Remote directory: ~/jobs/myjob
   Host:            user@cluster.example.com
 
   To cancel:       hpc-submit --cancel 12345678

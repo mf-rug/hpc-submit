@@ -24,11 +24,15 @@ def remote_dir_exists(remote_host: str, remote_path: str) -> bool:
     return result.returncode == 0
 
 
-def resolve_remote_path(remote_host: str, remote_path: str) -> str:
+def resolve_remote_path(remote_host: str, remote_path: str, overwrite: bool = False) -> str:
     if not remote_dir_exists(remote_host, remote_path):
         return remote_path
 
     print(f"Remote directory already exists: {remote_path}")
+    if overwrite:
+        print("  Overwriting (--overwrite).")
+        return remote_path
+
     choice = input("  [o]verwrite or [n]ew numbered directory? [o/n]: ").strip().lower()
 
     if choice == "o":
@@ -59,17 +63,32 @@ def transfer_files(
     job_script: Path,
     extra_files: list[Path],
 ) -> None:
-    sources = [str(job_script)]
-    for f in extra_files:
-        sources.append(str(f))
-
     destination = f"{remote_host}:{remote_path}/"
-    cmd = ["rsync", "-avz", "--progress", *sources, destination]
+    job_dir = job_script.parent.resolve()
 
+    # Rsync entire job directory contents (input/, boltz_tools/, job.sh, etc.)
+    # Exclude output/ to avoid re-uploading large result files on re-runs.
+    print(f"Transferring contents of {job_dir}/ ...")
+    cmd = [
+        "rsync", "-avz", "--progress",
+        "--exclude=output/",
+        "--exclude=__pycache__/",
+        "--exclude=*.pyc",
+        str(job_dir) + "/",
+        destination,
+    ]
     result = subprocess.run(cmd)
     if result.returncode != 0:
         print(f"Error: rsync transfer failed (exit code {result.returncode})", file=sys.stderr)
         sys.exit(1)
+
+    # Transfer any extra files specified with --files (additive, outside the job dir)
+    for f in extra_files:
+        cmd_extra = ["rsync", "-avz", "--progress", str(f), destination]
+        result = subprocess.run(cmd_extra)
+        if result.returncode != 0:
+            print(f"Error: rsync transfer failed for {f} (exit code {result.returncode})", file=sys.stderr)
+            sys.exit(1)
 
 
 def run_sbatch(
@@ -95,6 +114,28 @@ def run_sbatch(
         sys.exit(1)
 
     return job_id
+
+
+def check_job_status(remote_host: str, job_id: int) -> None:
+    # Try squeue first (job is still in the queue / running)
+    result = subprocess.run(
+        ["ssh", remote_host, f"squeue -j {job_id} --noheader -o '%T %r'"],
+        capture_output=True, text=True,
+    )
+    if result.stdout.strip():
+        print(f"Job {job_id}: {result.stdout.strip()}")
+        return
+    # Fall back to sacct for completed / failed jobs
+    result = subprocess.run(
+        ["ssh", remote_host,
+         f"sacct -j {job_id} --noheader -n -o 'State,ExitCode,Elapsed,NodeList'"],
+        capture_output=True, text=True,
+    )
+    lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+    if lines:
+        print(f"Job {job_id}: {lines[0]}")
+    else:
+        print(f"Job {job_id}: not found")
 
 
 def cancel_job(remote_host: str, job_id: int) -> None:
@@ -124,6 +165,7 @@ def submit(
     remote_base_path: str,
     name: str | None,
     extra_files: list[Path],
+    overwrite: bool = False,
 ) -> None:
     if name is None:
         name = parse_sbatch_directive(job_script, "job-name")
@@ -141,11 +183,11 @@ def submit(
         print(f"Found #SBATCH --output directory: {output_dir}")
         choice = input(f"  Use this instead of {default_path}? [y/n]: ").strip().lower()
         if choice == "y":
-            remote_path = resolve_remote_path(remote_host, output_dir)
+            remote_path = resolve_remote_path(remote_host, output_dir, overwrite=overwrite)
         else:
-            remote_path = resolve_remote_path(remote_host, default_path)
+            remote_path = resolve_remote_path(remote_host, default_path, overwrite=overwrite)
     else:
-        remote_path = resolve_remote_path(remote_host, f"{remote_base_path}/{sanitize_dir_name(name)}")
+        remote_path = resolve_remote_path(remote_host, f"{remote_base_path}/{sanitize_dir_name(name)}", overwrite=overwrite)
 
     print(f"Creating remote directory: {remote_path}")
     create_remote_dir(remote_host, remote_path)

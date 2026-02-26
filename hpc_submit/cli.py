@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 from .config import ensure_config, interactive_setup, resolve_remote_host
-from .submit import cancel_job, submit
+from .submit import cancel_job, check_job_status, submit
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,6 +38,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cancel a running job by its SLURM job ID.",
     )
     parser.add_argument(
+        "--status",
+        type=int,
+        metavar="JOB_ID",
+        help="Check the status of a running or completed job.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite the remote directory if it already exists (no prompt).",
+    )
+    parser.add_argument(
         "--init",
         action="store_true",
         help="Run (or re-run) interactive configuration setup.",
@@ -69,6 +80,12 @@ def main() -> None:
             cancel_job(remote_host, args.cancel)
             sys.exit(0)
 
+        if args.status is not None:
+            config = ensure_config()
+            remote_host = resolve_remote_host(config)
+            check_job_status(remote_host, args.status)
+            sys.exit(0)
+
         if args.init:
             interactive_setup()
             if args.job_script is None:
@@ -89,6 +106,7 @@ def main() -> None:
             remote_base_path=config.remote_base_path,
             name=args.jobname,
             extra_files=args.files,
+            overwrite=args.overwrite,
         )
     except KeyboardInterrupt:
         print("\nAborted.", file=sys.stderr)
