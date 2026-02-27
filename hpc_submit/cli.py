@@ -2,7 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .config import ensure_config, interactive_setup, resolve_remote_host
+from .config import check_connectivity, ensure_config, interactive_setup, resolve_remote_host
 from .submit import cancel_job, check_job_status, submit
 
 
@@ -53,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run (or re-run) interactive configuration setup.",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Test SSH connectivity and remote path access using saved config.",
+    )
     return parser
 
 
@@ -85,6 +90,11 @@ def main() -> None:
             remote_host = resolve_remote_host(config)
             check_job_status(remote_host, args.status)
             sys.exit(0)
+
+        if args.check:
+            config = ensure_config()
+            success = check_connectivity(config)
+            sys.exit(0 if success else 1)
 
         if args.init:
             interactive_setup()

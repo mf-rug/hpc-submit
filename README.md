@@ -14,7 +14,7 @@ A small command-line tool for submitting SLURM jobs to a remote HPC cluster. It 
 ## Requirements
 
 - Python 3.10+
-- SSH access to the cluster with key-based authentication
+- SSH access to the cluster (key-based or 2FA with ControlMaster — see below)
 - `rsync` installed locally
 
 ## Installation
@@ -27,19 +27,54 @@ This makes the `hpc-submit` command available in your shell.
 
 ## First-time setup
 
-On first run, `hpc-submit` will interactively ask for your configuration:
+Run `hpc-submit --init` (or it runs automatically on first use):
 
 ```
 hpc-submit: configuration setup
------------------------------------
-Environment variable holding user@host [HPC]:
+========================================
+
+SSH target — this is what gets passed to ssh and rsync.
+  You can use:
+    - An SSH config alias, e.g.: hpc
+    - A full user@host, e.g.: user@cluster.example.com
+
+SSH target [hpc]:
 Remote base path for job directories [~/jobs]:
 ```
 
-- **Environment variable**: The name of the env var that holds your `user@host` login (e.g. `HPC`). You should have something like `export HPC=user@cluster.example.com` in your shell profile.
-- **Remote base path**: Where job directories are created on the cluster.
+The setup wizard **tests the SSH connection** and provides specific diagnostics
+if it fails. An SSH config alias is recommended because it carries IdentityFile,
+ControlMaster, ProxyJump, and other settings.
 
-The config is saved to `~/.config/hpc-submit/config.yaml` and can be re-run anytime with `--init`.
+The config is saved to `~/.config/hpc-submit/config.yaml` and can be re-run
+anytime with `--init`.
+
+## SSH setup for 2FA clusters
+
+If your cluster requires two-factor authentication (keyboard-interactive),
+batch SSH calls will fail because they cannot prompt for a code.
+
+The fix is **SSH ControlMaster multiplexing**. Add this to `~/.ssh/config`:
+
+```
+Host hpc
+    HostName login.cluster.example.com
+    User your-username
+    IdentityFile ~/.ssh/your-key
+    ControlMaster auto
+    ControlPath ~/.ssh/sockets/%r@%h-%p
+    ControlPersist 4h
+```
+
+Then:
+```bash
+mkdir -p ~/.ssh/sockets
+ssh hpc   # log in once manually with your 2FA code
+```
+
+All subsequent ssh/rsync/hpc-submit calls will reuse the authenticated
+connection for 4 hours. Use the alias `hpc` as your SSH target in
+`hpc-submit --init`.
 
 ## Usage
 
@@ -85,6 +120,15 @@ hpc-submit --cancel 12345678
 
 Runs `scancel` on the remote cluster.
 
+### Check SSH connectivity
+
+```bash
+hpc-submit --check
+```
+
+Tests the SSH connection and verifies the remote base path is accessible.
+Provides specific diagnostics if anything fails — useful as a first debugging step.
+
 ### Overwrite an existing remote directory
 
 ```bash
@@ -116,7 +160,7 @@ Submitting job...
 Job submitted successfully.
   Job ID:          12345678
   Remote directory: ~/jobs/myjob
-  Host:            user@cluster.example.com
+  Host:            hpc
 
   To cancel:       hpc-submit --cancel 12345678
 ----------------------------------------
